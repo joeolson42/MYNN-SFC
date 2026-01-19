@@ -532,7 +532,7 @@ if (flag_iter) then
          call li_etal_2010(zol,rb,za/zntstoch,zratio)
          !zol=za*karman*grav*mol/(th_1*max(ust*ust,0.0001))
          zol=max(zol,zero)
-         zol=min(zol,20._kind_phys)
+         zol=min(zol,twenty)
 
          if (debug_code >= 1) then
             if (zntstoch < 1e-8 .or. zt < 1e-10) then
@@ -551,7 +551,7 @@ if (flag_iter) then
          zol=zolrib(rb,za,zntstoch,zt,gz1oz0,gz1ozt,zol,psi_opt)
       endif ! restart
       zol=max(zol,zero)
-      zol=min(zol,20._kind_phys)
+      zol=min(zol,twenty)
 
       zolzt = zol*zt/ZA                ! zt/L
       zolz0 = zol*ZNTstoch/ZA          ! z0/L
@@ -639,9 +639,9 @@ if (flag_iter) then
       !---limit psih and psim in the case of thin layers and
       !---high roughness.  this prevents denominator in fluxes
       !---from getting too small
-      psih=min(psih,p9*gz1ozt)
-      psim=min(psim,p9*gz1oz0)
-      psih2=min(psih2,p9*gz2ozt)
+      psih  =min(psih,  p9*gz1ozt)
+      psim  =min(psim,  p9*gz1oz0)
+      psih2 =min(psih2, p9*gz2ozt)
       psim10=min(psim10,p9*gz10oz0)
       psih10=min(psih10,p9*gz10ozt)
 
@@ -654,7 +654,7 @@ if (flag_iter) then
    psix10=max(gz10oz0-psim10, one)    ! = fm10
    psit  =max(gz1ozt-psih   , one)    ! = fh
    psit2 =max(gz2ozt-psih2  , one)    ! = fh2
-   psiq  =max(log((za+zq)/zq)-psih ,  one)
+   psiq  =max(log((za+zq)/zq)-psih  , one)
    psiq2 =max(log((two+zq)/zq)-psih2, one)
 
    !------------------------------------------------------------
@@ -663,14 +663,14 @@ if (flag_iter) then
 
    ! to prevent oscillations average with old value
    oldust = ust
-   ust=0.5*ust+0.5*karman*wspd/psix
+   ust=p5*ust + p5*karman*wspd/psix
    !non-averaged:
    !ust=karman*wspd/psix
    stress=ust**2
 
    ! Compute u* without vconv for use in HFX calc when sf_mynn_sfcflux_water > 0
-   wspdi=max(sqrt(u_1*u_1+v_1*v_1), wmin)
-   ustm=0.5*ustm+0.5*karman*wspdi/psix
+   wspdi=max(sqrt(u_1*u_1 + v_1*v_1), wmin)
+   ustm=p5*ustm + p5*karman*wspdi/psix
 
    !----------------------------------------------------
    !----COMPUTE THE TEMPERATURE SCALE (a.k.a. FRICTION TEMPERATURE, T*, or MOL)
@@ -715,8 +715,8 @@ if ( flag_iter ) then
       ch   = zero
       chs2 = zero
       cqs2 = zero
-      ch= zero
-      cm= zero
+      ch   = zero
+      cm   = zero
 
    else
 
@@ -989,7 +989,7 @@ end subroutine mynnsfc_water
  czc    = m*wsp10m + b
  czc    = max(czc, zero)
 
- z_0 = czc*ustar*ustar*g_inv + (0.11_kind_phys*visc/max(ustar,0.07_kind_phys))
+ z_0 = czc*ustar*ustar*g_inv + (0.11_kind_phys*visc/max(ustar,0.05_kind_phys))
  z_0 = max( z_0, 1.27e-7_kind_phys)  !these max/mins were suggested by
  z_0 = min( z_0, 2.85e-3_kind_phys)  !davis et al. (2008)
 
@@ -1062,11 +1062,11 @@ end subroutine mynnsfc_water
     zq = zt
  endif
 
- zt = min(zt,1.0e-4_kind_phys)
- zt = max(zt,2.0e-9_kind_phys)
+ zt = min(zt, 1.0e-4_kind_phys)
+ zt = max(zt, 2.0e-9_kind_phys)
 
- zq = min(zt,1.0e-4_kind_phys)
- zq = max(zt,2.0e-9_kind_phys)
+ zq = min(zq, 1.0e-4_kind_phys)
+ zq = max(zq, 2.0e-9_kind_phys)
 
  end subroutine fairall_etal_2003
 !--------------------------------------------------------------------
@@ -1088,12 +1088,15 @@ end subroutine mynnsfc_water
  zq = zt
 
  if (spp_sfc ==1) then
-    zt = max(zt + zt*0.5_kind_phys*rstoch,2.0e-9_kind_phys)
-    zq = max(zt + zt*0.5_kind_phys*rstoch,2.0e-9_kind_phys)
- else
-    zt = max(zt,2.0e-9_kind_phys)
-    zq = max(zt,2.0e-9_kind_phys)
+    zt = zt + zt*0.5_kind_phys*rstoch
+    zq = zq + zq*0.5_kind_phys*rstoch
  endif
+
+ zt = min(zt, 1.0e-4_kind_phys)
+ zt = max(zt, 2.0e-9_kind_phys)
+
+ zq = min(zq, 1.0e-4_kind_phys)
+ zq = max(zq, 2.0e-9_kind_phys)
 
  end subroutine fairall_etal_2014
 !--------------------------------------------------------------------
