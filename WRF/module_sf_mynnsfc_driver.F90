@@ -99,7 +99,7 @@
         znt      , ust      , ustm     , pblh     , mavail   , zol       , &
         mol      , rmol     , regime   , psim     , psih     , xland     , &
         hfx      , qfx      , lh       , tsk      , flhc     , flqc      , &
-        qgh      , qsfc     , u10      , v10      , th2      , t2        , &
+        qsfc     , u10      , v10      , th2      , t2       ,             &
         q2       , snowh    , gz1oz0   , wspd     , br       , dx        , &
         ch       , qcg      , ck       , cka      , cd       , cda       , &
         stress   , hflx     , qflx     , cm       , fm       , fh        , &
@@ -151,7 +151,6 @@
 !-- flhc        exchange coefficient for heat (w/m^2/k)
 !-- flqc        exchange coefficient for moisture (kg/m^2/s)
 !-- chs         heat/moisture exchange coefficient for lsm (m/s)
-!-- qgh         lowest-level saturated mixing ratio
 !-- qsfc        qv (specific humidity) at the surface
 !-- qsfcmr      qv (mixing ratio) at the surface
 !-- u10         diagnostic 10m u wind
@@ -294,7 +293,6 @@
     mol,    &
     rmol,   &
     qsfc,   &
-    qgh,    &
     znt,    &
     zol,    &
     ust,    &
@@ -323,7 +321,7 @@
  real(kind_phys) :: u_1,v_1,u_2,v_2,qv_1,p_1,t_1,rho_1,dz8w_1,        &
                      dz8w_2,rstoch_1
  real(kind_phys) :: regime_1,hfx_1,qfx_1,lh_1,mol_1,rmol_1,           &
-                     qgh_1,qsfc_1,znt_1,zol_1,ust_1,cpm_1,chs2_1,     &
+                     qsfc_1,znt_1,zol_1,ust_1,cpm_1,chs2_1,           &
                      cqs_1,cqs2_1,chs_1,ch_1,flhc_1,flqc_1,gz1oz0_1,  &
                      wspd_1,br_1,psim_1,psih_1
  real(kind_phys) :: u10_1,v10_1,th2_1,t2_1,q2_1
@@ -399,7 +397,6 @@
        qflx_1   = qfx_1/rho_1      !ccpp
        lh_1     = lh(i,j)
        rmol_1   = rmol(i,j)
-       qgh_1    = qgh(i,j)
        znt_1    = znt(i,j)
        zol_1    = zol(i,j)
        cpm_1    = cpm(i,j)
@@ -502,7 +499,7 @@
                  psim     = psim_1    , psih     = psih_1    , hfx      = hfx_1    , qfx       = qfx_1     , &
                  tskin    = tsk_1     , u10      = u10_1     , v10      = v10_1    , th2       = th2_1     , &
                  t2       = t2_1      , q2       = q2_1      , flhc     = flhc_1   , flqc      = flqc_1    , &
-                 snowh    = snowh_1   , qgh      = qgh_1     , qsfc     = qsfc_1   ,                         &
+                 snowh    = snowh_1   , qsfc     = qsfc_1    ,                                               &
                  lh       = lh_1      , gz1oz0   = gz1oz0_1  , wspd     = wspd_1   , rb        = br_1      , &
                  cpm      = cpm_1     , ch       = ch_1      , cm       = cm_1     , rstoch_1  = rstoch_1  , &
                  wstar    = wstar_1   , qstar    = qstar_1   ,                                               &
@@ -535,7 +532,7 @@
                  psim     = psim_1    , psih     = psih_1    , hfx      = hfx_1    , qfx       = qfx_1     , &
                  tskin    = tsk_1     , u10      = u10_1     , v10      = v10_1    , th2       = th2_1     , &
                  t2       = t2_1      , q2       = q2_1      , flhc     = flhc_1   , flqc      = flqc_1    , &
-                 snowh    = snowh_1   , qgh      = qgh_1     , qsfc     = qsfc_1   ,                         &
+                 snowh    = snowh_1   , qsfc     = qsfc_1    ,                                               &
                  lh       = lh_1      , gz1oz0   = gz1oz0_1  , wspd     = wspd_1   , rb        = br_1      , &
                  cpm      = cpm_1     , ch       = ch_1      , cm       = cm_1     , rstoch_1  = rstoch_1  , &
                  wstar    = wstar_1   , qstar    = qstar_1   ,                                               &
@@ -571,7 +568,7 @@
                  psim     = psim_1    , psih     = psih_1    , hfx      = hfx_1    , qfx       = qfx_1     , &
                  tskin    = tsk_1     , u10      = u10_1     , v10      = v10_1    , th2       = th2_1     , &
                  t2       = t2_1      , q2       = q2_1      , flhc     = flhc_1   , flqc      = flqc_1    , &
-                 snowh    = snowh_1   , qgh      = qgh_1     , qsfc     = qsfc_1   ,                         &
+                 snowh    = snowh_1   , qsfc     = qsfc_1    ,                                               &
                  lh       = lh_1      , gz1oz0   = gz1oz0_1  , wspd     = wspd_1   , rb        = br_1      , &
                  cpm      = cpm_1     , ch       = ch_1      , cm       = cm_1     , rstoch_1  = rstoch_1  , &
                  wstar    = wstar_1   , qstar    = qstar_1   ,                                               &
@@ -594,7 +591,6 @@
        lh(i,j)     = lh_1
        mol(i,j)    = mol_1
        rmol(i,j)   = rmol_1
-       qgh(i,j)    = qgh_1
        qsfc(i,j)   = qsfc_1
        znt(i,j)    = znt_1
        zol(i,j)    = zol_1
