@@ -36,17 +36,30 @@
  module module_sf_mynnsfc_driver
 !=================================================================================================================
  use module_sf_mynnsfc_common,only: kind_phys,cp,lsm_ruc => ruclsmscheme
- use module_sf_mynnsfc_land,  only: mynnsfc_land, psi_init
+ use module_sf_mynnsfc_land,  only: mynnsfc_land
  use module_sf_mynnsfc_water, only: mynnsfc_water
  use module_sf_mynnsfc_ice,   only: mynnsfc_ice
  
  implicit none
 
  !Global configuration options, to be moved to namelist variables:
- integer, parameter :: psi_opt      = 0       !0: mynn, 1: gfs
- logical, parameter :: compute_flux = .true.  !whether or not to compute the surface fluxes
- logical, parameter :: compute_diag = .true.  !whether or not to compute the 2- and 10-m diagnostics
+ integer, parameter :: psi_opt         = 0       !0: mynn, 1: gfs
+ logical, parameter :: compute_flux    = .true.  !whether or not to compute the surface fluxes
+ logical, parameter :: compute_diag    = .true.  !whether or not to compute the 2- and 10-m diagnostics
+
+!define constant parameters for precision-control:
+ real(kind_phys), parameter :: sqrt3   = 1.7320508075688773
+ real(kind_phys), parameter :: atan1   = 0.785398163397     !in radians
+ real(kind_phys), parameter :: p333    = 1.0/3.0
+ real(kind_phys), parameter :: zero    = 0.0
+ real(kind_phys), parameter :: one     = 1.0
+ real(kind_phys), parameter :: two     = 2.0
+ real(kind_phys), parameter :: four    = 4.0
+ real(kind_phys), parameter :: ten     = 10.0
  
+ real(kind_phys), dimension(0:1000 ),save :: psim_stab,psim_unstab, &
+                                             psih_stab,psih_unstab
+
  private
  public:: mynnsfc_driver, &
           mynnsfc_init,   &
@@ -78,7 +91,7 @@
  subroutine mynnsfclay_finalize(errmsg,errflg)
 !=================================================================================================================
 
-!--- output arguments:                                                                                                                                                                              
+ !--- output arguments:
  character(len=*),intent(out):: errmsg
  integer,intent(out):: errflg
 
@@ -223,15 +236,6 @@
  !threshold for choosing snow/ice points (In WRF, snowh is in meters)
  real,parameter:: snow_thresh = 0.05 !5 cm
 
- !phycical constants - now coming in through the common module
-! real(kind_phys),intent(in):: svp1,svp2,svp3,svpt0
-! real(kind_phys),intent(in):: ep1,ep2,karman
-! real(kind_phys),intent(in):: cp,g,rovcp,r,xlv
- real(kind_phys), parameter :: &
-    zero     = 0.0,   &
-    one      = 1.0,   &
-    two      = 2.0
-
  real(kind_phys),intent(in),dimension(ims:ime,kms:kme,jms:jme):: &
     dz8w,  &
     qv3d,  &
@@ -250,7 +254,6 @@
  
  real(kind_phys),intent(in),dimension(ims:ime,jms:jme):: &
     mavail, &
-    pblh,   &
     xland,  &
     tsk,    &
     qcg,    &
@@ -279,14 +282,17 @@
     fm,    &
     fh,    &
     fm10,  &
-    fh2,   &
-    hflx,  &
-    qflx,  &
-    stress
+    fh2
 
-!--- inout arguments:
+ !--- inout arguments:
+  real(kind_phys),intent(inout),dimension(ims:ime,jms:jme),optional:: &
+    hflx,   &
+    qflx,   &
+    stress
+  
  real(kind_phys),intent(inout),dimension(ims:ime,jms:jme):: &
     regime, &
+    pblh,   &
     hfx,    &
     qfx,    &
     lh,     &
@@ -312,8 +318,9 @@
 
 !--- local variables and arrays:
  integer:: i,j,k,vegtype_1,iter,loc_z0_type
- logical:: loc_redrag,loc_iter
- real(kind_phys),dimension(ims:ime,jms:jme):: qstar,wstar
+ logical:: loc_redrag,loc_iter,loc_cycle
+ real(kind_phys),dimension(ims:ime,jms:jme):: wstar
+ real(kind_phys),dimension(ims:ime,jms:jme):: qstar
 
 !intermediate single-point variables will be *_1
  real(kind_phys) :: mavail_1,pblh_1,xland_1,tsk_1,psfcpa_1,           &
@@ -331,30 +338,43 @@
                      fm10_1,fh2_1,hflx_1,qflx_1
  real(kind_phys) :: sigmaf_1,shdmax_1,z0pert_1,ztpert_1
 
+ integer, parameter:: debug_driver = 0  !0: no output, 1: write output
 !-----------------------------------------------------------------------------------------------------------------
  errmsg = ' '
  errflg = 0
+ iter   = 1 !ccpp variable
 
- iter = 1
- do j = jts,jte
-    do i = its,ite
-       u_1      = u3d(i,kts,j)
-       v_1      = v3d(i,kts,j)
-
-       !variables that may be used prior to first calculation - sometimes depending on
-       !model configuration 
-       !if (initflag == 1) then
-       if (itimestep== 1) then
-          if (ust(i,j) .lt. 1e-4 .or. ust(i,j) .gt. 4.0) then
-             ust(i,j)   = max(0.04_kind_phys*sqrt(u_1*u_1 + v_1*v_1),0.001)
+ !cycling flag is not in WRF, use local variable:
+ if (present(cycling)) then
+    loc_cycle = cycling
+ else
+    loc_cycle = .false.
+ endif
+ 
+ if (itimestep==1 .and. (not(restart) .or. not(loc_cycle))) then
+    !cold starts
+    do j = jts,jte
+       do i = its,ite
+          if (ust(i,j) .le. 1e-4 .or. ust(i,j) .gt. 4.0) then
+             u_1      = u3d(i,kts,j)
+             v_1      = v3d(i,kts,j)
+             ust(i,j) = max(0.04_kind_phys*sqrt(u_1*u_1 + v_1*v_1),0.001_kind_phys)
           endif
-          !qfx(i)   = zero
-          !hfx(i)   = zero
-          mol_1   = zero
-          !qsfc(i)  = qv1d(i)/(1.+qv1d(i))
-          qsfc_1  = qsfc(i,j) !should be available (LSM variable)
-          qstar_1 = zero
-       endif
+          pblh(i,j) = max(ten, 700._kind_phys*ust(i,j)) !this estimate is much better than zero
+          qfx(i,j)  = zero
+          hfx(i,j)  = zero
+          mol(i,j)  = zero
+       enddo
+    enddo
+ endif
+ if (itimestep==1) then
+    qstar = zero !local variable will not be read in for restarts or cycling
+ endif
+ 
+ do j = jts,jte
+    do i = its,ite      
+       u_1     = u3d(i,kts,j)
+       v_1     = v3d(i,kts,j)
        ust_1   = ust(i,j)
        stress_1= ust_1**2
        mol_1   = mol(i,j)
@@ -510,6 +530,8 @@
                  flag_restart= restart, flag_cycle= cycling  , compute_flux        = compute_flux          , &
                  psi_opt  = psi_opt   , lsm      = flag_lsm  , compute_diag        = compute_diag          , &
                  lsm_ruc  = lsm_ruc   ,                                                                      &
+                 !stability function tables
+                 psim_stab= psim_stab ,psim_unstab=psim_unstab,psih_stab=psih_stab ,psih_unstab=psih_unstab, &
                  !error management
                  errmsg   = errmsg    , errflg   = errflg                                                    &
                     )
@@ -543,6 +565,8 @@
                  flag_restart= restart, flag_cycle= cycling  , compute_flux       = compute_flux           , &
                  psi_opt  = psi_opt   , lsm      = flag_lsm  , compute_diag       = compute_diag           , &
                  lsm_ruc  = lsm_ruc   ,                                                                      &
+                 !stability function tables
+                 psim_stab= psim_stab ,psim_unstab=psim_unstab,psih_stab=psih_stab ,psih_unstab=psih_unstab, &
                  !error management
                  errmsg   = errmsg    , errflg   = errflg                                                    &
                     )
@@ -579,6 +603,8 @@
                  flag_restart= restart, flag_cycle= cycling  , compute_flux        = compute_flux          , &
                  psi_opt  = psi_opt   ,                        compute_diag        = compute_diag          , &
                  lsm_ruc  = lsm_ruc   , lsm      = flag_lsm  ,                                               &
+                 !stability function tables
+                 psim_stab= psim_stab ,psim_unstab=psim_unstab,psih_stab=psih_stab ,psih_unstab=psih_unstab, &
                  !error management
                  errmsg   = errmsg    , errflg   = errflg                                                    &
                     )
@@ -628,21 +654,204 @@
           cda(i,j) = cda_1
        endif
        if(present(fm) .and. present(fh) .and. present(fm10) .and. present(fh2)) then
-          fm(i,j)    = fm_1
-          fh(i,j)    = fh_1
-          fm10(i,j)  = fm10_1
-          fh2(i,j)   = fh2_1
+          fm(i,j)  = fm_1
+          fh(i,j)  = fh_1
+          fm10(i,j)= fm10_1
+          fh2(i,j) = fh2_1
        endif
        if(present(ustm))  ustm(i,j)  = ustm_1
        if(present(stress))stress(i,j)= stress_1
        if(present(cm))    cm(i,j)    = cm_1
-       
+
+       if (debug_driver == 1) then
+          write(*,*)"=== end of driver, xland=",xland(i,j),"snow=",snowh(i,j)
+          write(*,*)"hfx=",hfx(i,j)," qfx=",qfx(i,j)," lh=",lh(i,j)
+          write(*,*)"flqc=",flqc(i,j)," flhc=",flhc(i,j)," u*=",ust(i,j)
+          !write(*,*)"psim_stab=",psim_stab(1)," psim_unstab=",psim_unstab(1)
+          !write(*,*)"psih_stab=",psih_stab(1)," psih_unstab=",psih_unstab(1)
+          write(*,*)"=================================================="
+       endif
     enddo !i-loop
  enddo !j-loop
  
 
  end subroutine mynnsfc_driver
 
+ !====================================================================
+ !>\ingroup mynn_sfc
+ !!
+ subroutine psi_init(psi_opt,errmsg,errflg)
+
+ integer                       :: n,psi_opt
+ real(kind_phys)               :: zolf
+ character(len=*), intent(out) :: errmsg
+ integer, intent(out)          :: errflg
+
+ if (psi_opt == 0) then
+    do n=0,1000
+       ! stable function tables
+       zolf = float(n)*0.01_kind_phys
+       psim_stab(n)=psim_stable_full(zolf)
+       psih_stab(n)=psih_stable_full(zolf)
+
+       ! unstable function tables
+       zolf = -float(n)*0.01_kind_phys
+       psim_unstab(n)=psim_unstable_full(zolf)
+       psih_unstab(n)=psih_unstable_full(zolf)
+    enddo
+ else
+    do n=0,1000
+       ! stable function tables
+       zolf = float(n)*0.01_kind_phys
+       psim_stab(n)=psim_stable_full_gfs(zolf)
+       psih_stab(n)=psih_stable_full_gfs(zolf)
+
+       ! unstable function tables
+       zolf = -float(n)*0.01_kind_phys
+       psim_unstab(n)=psim_unstable_full_gfs(zolf)
+       psih_unstab(n)=psih_unstable_full_gfs(zolf)
+    enddo
+ endif
+
+ !simple test to see if initialization worked:
+ if (psim_stab(1) < 0. .and. psih_stab(1) < 0. .and. &
+    psim_unstab(1) > 0. .and. psih_unstab(1) > 0.) then
+    errmsg = 'in mynn sfc, psi tables have been initialized'
+    errflg = 0
+ else
+    errmsg = 'error in mynn sfc: problem initializing psi tables'
+    errflg = 1
+ endif
+
+ end subroutine psi_init
+
+! ==================================================================
+! ... integrated similarity functions from MYNN...
+!
+!>\ingroup mynn_sfc
+ real(kind_phys) function psim_stable_full(zolf)
+
+    real(kind_phys) :: zolf
+
+    !psim_stable_full=-6.1*log(zolf+(1+zolf**2.5)**(1./2.5))
+    psim_stable_full=-6.1_kind_phys*log(zolf+(one+zolf**2.5_kind_phys)**0.4_kind_phys)
+
+ end function
+
+!>\ingroup mynn_sfc
+ real(kind_phys) function psih_stable_full(zolf)
+
+    real(kind_phys) :: zolf
+
+    !psih_stable_full=-5.3*log(zolf+(1+zolf**1.1)**(1./1.1))
+    psih_stable_full=-5.3_kind_phys*log(zolf+(one+zolf**1.1_kind_phys)**0.9090909090909090909_kind_phys)
+
+ end function
+
+!>\ingroup mynn_sfc
+ real(kind_phys) function psim_unstable_full(zolf)
+
+    real(kind_phys) :: zolf,x,ym,psimc,psimk
+
+    x=(one-16._kind_phys*zolf)**.25_kind_phys
+    !psimk=2*ALOG(0.5*(1+X))+ALOG(0.5*(1+X*X))-2.*ATAN(X)+2.*ATAN(1.)
+    !psimk=2.*ALOG(0.5*(1+X))+ALOG(0.5*(1+X*X))-2.*ATAN(X)+2.*atan1
+    psimk=two*LOG(0.5_kind_phys*(one+X))+LOG(0.5_kind_phys*(one+X*X))-two*ATAN(X)+two*atan1
+
+    ym=(one-ten*zolf)**p333
+    !psimc=(3./2.)*log((ym**2.+ym+1.)/3.)-sqrt(3.)*ATAN((2.*ym+1)/sqrt(3.))+4.*ATAN(1.)/sqrt(3.)
+    psimc=1.5_kind_phys*log((ym**2 + ym+one)*p333)-sqrt3*ATAN((two*ym+1)/sqrt3)+four*atan1/sqrt3
+
+    psim_unstable_full=(psimk+zolf**2*(psimc))/(1+zolf**2)
+
+ end function
+
+!>\ingroup mynn_sfc
+ real(kind_phys) function psih_unstable_full(zolf)
+
+    real(kind_phys) :: zolf,y,yh,psihc,psihk
+
+    y=(one-16._kind_phys*zolf)**.5_kind_phys
+    !psihk=2.*log((1+y)/2.)
+    psihk=two*log((one+y)*0.5_kind_phys)
+
+    yh=(one-34._kind_phys*zolf)**p333
+    !psihc=(3./2.)*log((yh**2.+yh+1.)/3.)-sqrt(3.)*ATAN((2.*yh+1)/sqrt(3.))+4.*ATAN(1.)/sqrt(3.)
+    psihc=1.5_kind_phys*log((yh**2+yh+one)*p333)-sqrt3*ATAN((two*yh+one)/sqrt3)+four*atan1/sqrt3
+
+    psih_unstable_full=(psihk+zolf**2*(psihc))/(one+zolf**2)
+
+ end function
+
+ ! ==================================================================
+ ! ... integrated similarity functions from GFS...
+ !
+ !>\ingroup mynn_sfc
+ !!
+ real(kind_phys) function psim_stable_full_gfs(zolf)
+
+    real(kind_phys) :: zolf
+    real(kind_phys), parameter :: alpha4 = 20.
+    real(kind_phys) :: aa
+
+    aa     = sqrt(one + alpha4 * zolf)
+    psim_stable_full_gfs  = -1.*aa + log(aa + one)
+
+ end function
+
+ !>\ingroup mynn_sfc
+ !!
+ real(kind_phys) function psih_stable_full_gfs(zolf)
+
+    real(kind_phys) :: zolf
+    real(kind_phys), PARAMETER :: alpha4 = 20.
+    real(kind_phys) :: bb
+
+    bb     = sqrt(one + alpha4 * zolf)
+    psih_stable_full_gfs  = -1.*bb + log(bb + one)
+
+ end function
+
+ !>\ingroup mynn_sfc
+ !!
+ real(kind_phys) function psim_unstable_full_gfs(zolf)
+
+    real(kind_phys) :: zolf
+    real(kind_phys) :: hl1,tem1
+    real(kind_phys), PARAMETER :: a0=-3.975,  a1=12.32,  &
+                                  b1=-7.755,  b2=6.041
+
+    if (zolf .ge. -0.5) then
+       hl1   = zolf
+       psim_unstable_full_gfs  = (a0  + a1*hl1)  * hl1   / (one + (b1+b2*hl1)  *hl1)
+    else
+       hl1   = -zolf
+       tem1  = one / sqrt(hl1)
+       psim_unstable_full_gfs  = log(hl1) + two * sqrt(tem1) - .8776_kind_phys
+    end if
+
+ end function
+
+ !>\ingroup mynn_sfc
+ !!
+ real(kind_phys) function psih_unstable_full_gfs(zolf)
+
+    real(kind_phys) :: zolf
+    real(kind_phys) :: hl1,tem1
+    real(kind_phys), PARAMETER :: a0p=-7.941, a1p=24.75, &
+                                  b1p=-8.705, b2p=7.899
+
+    if (zolf .ge. -0.5) then
+       hl1   = zolf
+       psih_unstable_full_gfs  = (a0p + a1p*hl1) * hl1   / (one+ (b1p+b2p*hl1)*hl1)
+    else
+       hl1   = -zolf
+       tem1  = one / sqrt(hl1)
+       psih_unstable_full_gfs  = log(hl1) + .5_kind_phys * tem1 + 1.386_kind_phys
+    end if
+
+ end function
+      
 !=================================================================================================================
  end module module_sf_mynnsfc_driver
 !=================================================================================================================

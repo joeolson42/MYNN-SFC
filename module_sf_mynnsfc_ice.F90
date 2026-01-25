@@ -57,7 +57,7 @@ MODULE module_sf_mynnsfc_ice
       ep1 => p608  , & !=Rv/Rd - 1
       ep2 => ep_2  , & !=Rd/Rv
       ep3 => ep_3  , & !=1-ep_2 = 0.378
-      rvovrd       , & != r_v/r_d != 1.608
+      rvovrd       , & !=r_v/r_d != 1.608
       karman       , & !=0.4
       g_inv        , & !=1/grav
       kind_phys        !model framework specified precision
@@ -98,12 +98,8 @@ real(kind_phys), parameter :: p9            = 0.9
 
 !For debugging purposes:
 integer, PARAMETER :: debug_code = 0  !0: no extra ouput
-                                      !1: check input
-                                      !2: everything - heavy I/O
-
-real(kind_phys), DIMENSION(0:1000 ),SAVE :: psim_stab,psim_unstab, &
-                                            psih_stab,psih_unstab
-
+                                      !1: check input and derived variables
+                                      !2: additional checks for strange behavior - heavier I/O
 
 CONTAINS
 
@@ -141,6 +137,8 @@ CONTAINS
        flag_restart,flag_cycle   , psi_opt     ,               &
        compute_flux,compute_diag ,                             &
        iter        , lsm         , lsm_ruc     ,               &
+       !stability functions tables
+       psim_stab   , psim_unstab , psih_stab   , psih_unstab , &
        errmsg      , errflg                                    )
 
 !-------------------------------------------------------------------
@@ -161,6 +159,13 @@ integer, intent(in) :: isfflx
 integer, intent(in) :: spp_sfc, psi_opt
 logical, intent(in) :: compute_flux,compute_diag
 logical, intent(in) :: flag_iter
+
+!-----------------------------
+! input stability function tables
+!-----------------------------
+real(kind_phys),dimension(0:1000),intent(in) :: psim_stab,psim_unstab, &
+                                                psih_stab,psih_unstab
+
 !-----------------------------
 !input fields/variables
 !-----------------------------
@@ -172,9 +177,8 @@ real(kind_phys), intent(in) ::  rstoch_1
 !-----------------------------
 !output
 !-----------------------------
-real(kind_phys), intent(out)::  qfx,hfx,rmol
 real(kind_phys), intent(out)::  u10,v10,th2,t2,q2
-real(kind_phys), intent(out)::  qstar,wstar
+real(kind_phys), intent(out)::  wstar
 
 !-----------------------------
 !in/out
@@ -182,14 +186,14 @@ real(kind_phys), intent(out)::  qstar,wstar
 ! ccpp error handling:
 character(len=*),intent(inout):: errmsg
 integer,         intent(inout):: errflg
-real(kind_phys), intent(inout):: lh,qsfc,                          &
+real(kind_phys), intent(inout):: lh,qsfc,qfx,hfx,rmol,             &
                                  znt,cpm,chs,chs2,ch,              &
                                  flhc,flqc,                        &
                                  gz1oz0,wspd,                      &
                                  psim,psih,                        &
                                  ustm,                             &
                                  cqs,cqs2,                         &
-                                 mol,zol
+                                 qstar,mol,zol
 real(kind_phys), intent(inout):: ust,cm,rb,stress,                 &
                                  psix,psit,psix10,psit2,           &
                                  ck,cka,cd,cda
@@ -245,11 +249,12 @@ errmsg = ''
 
 ! psfc ( in cmb) is used later in saturation checks
 psfc=psfcpa/1000._kind_phys
+
 !tgs - do computations if flag_iter = .true.
 if ( flag_iter ) then
 
    if (itimestep == 1) then
-      !initialize surface specific humidity and mixing ratios for land, ice and water
+      !initialize surface specific humidity and mixing ratios
       tsk = tskin
       if (lsm == lsm_ruc) then
          qsfcmr=qsfc/(one-qsfc)        !mixing ratio
@@ -260,7 +265,7 @@ if ( flag_iter ) then
          qsfc=ep2*e1/(psfc-ep3*e1)             !specific humidity
          qsfcmr=ep2*e1/(psfc-e1)               !mixing ratio
       endif ! lsm
-      if(qsfc>one.or.qsfc<0.) print *,' qsfc',itimestep,i,qsfc,tsk
+      if(qsfc>one.or.qsfc<zero) print *,' qsfc=',qsfc," tsk=",tsk," itimestep=",itimestep,i,j
    else
       ! use what comes out of the nst, lsm, sice after check
       if (qsfc>one.or.qsfc<0.) then
@@ -279,14 +284,16 @@ endif ! flag_iter
 qvsh=qv_1/(one+qv_1)        !convert to spec hum (kg/kg)
 thcon=(100000._kind_phys/psfcpa)**rovcp
 if (flag_iter) then
-   ! define skin temperatures for land/water/ice
+   ! define skin temperatures
    tsk = tskin
    !tsk = 0.5 * (tsurf+tskin)
    ! convert skin temperatures to potential temperature:
    thsk = tsk*thcon              !(kelvin)
    thvsk = thsk*(one+ep1*qsfc)   !(kelvin)
-   if (thvsk < 160. .or. thvsk > 390.) &
+   if (thvsk < 160. .or. thvsk > 390.) then
+      print *,"*** unreasonable skin temperatures"
       print *,'thvsk',itimestep,i,thvsk,thsk,tsurf,tskin,qsfc
+   endif
 endif ! flag_iter
 
 ! convert lowest layer temperature to potential temperature:
@@ -302,7 +309,6 @@ za    = p5*dz8w_1             !height of first half-sigma level
 za2   = dz8w_1 + p5*dz8w_2    !height of 2nd half-sigma level
 govrth= grav/th_1
 cpm   = cp*(one+0.84_kind_phys*qv_1)
-
 !qfx=qflx*rho_1
 !hfx=hflx*rho_1*cp
 
@@ -343,20 +349,20 @@ if ( flag_iter ) then
    rb=min(rb, two)
 
    if (debug_code >= 1) then
-      write(*,*)"over water: itimestep=",itimestep," iter=",iter
+      write(*,*)"over ice: itimestep=",itimestep," iter=",iter
       write(*,*)"=== important input to mynnsfclayer, i:", i
       write(*,*)" pblh=",pblh," tsk=", tskin
       write(*,*)" tsurf=", tsurf," qsfc=", qsfc," znt=", znt
       write(*,*)" ust=", ust," snowh=", snowh,"psfcpa=",PSFCPA
       write(*,*)" dz=",dz8w_1," qfx=",qfx," hfx=",hfx
-      write(*,*)" psim_stab=",psim_stab(1)," psim_unstab=",psim_stab(1)
+      write(*,*)" psim_stab=",psim_stab(1)," psim_unstab=",psim_unstab(1)
       write(*,*)" psih_stab=",psih_stab(1)," psih_unstab=",psih_unstab(1)
       write(*,*)"=== derived quantities in mynn sfc layer:"
       write(*,*)"thv_1=", thv_1," tv_1=",tv_1," thvsk=", thvsk
       write(*,*)"rho_1=", rho_1," govrth=",govrth
       write(*,*)"qsfc=", qsfc," qsfcmr=", qsfcmr
       write(*,*)"=== after rb calc in mynn sfc layer:"
-      write(*,*)"over water, itimestep=",itimestep
+      write(*,*)"over ice, itimestep=",itimestep
       write(*,*)"wspd=", wspd," wstar=", wstar," vsgd=",vsgd
       write(*,*)"rb=", rb," dthvdz=",dthvdz
    endif
@@ -424,7 +430,7 @@ if ( flag_iter ) then
          zol=max(zol,zero)
          zol=min(zol,twenty)
 
-         if (debug_code >= 1) then
+         if (debug_code == 2) then
             if (zntstoch < 1e-8 .or. zt < 1e-10) then
                write(0,*)"===(ice) capture bad input in mynn sfc layer, i=:",i
                write(0,*)"rb=", rb," znt=", zntstoch," zt=",zt
@@ -436,9 +442,9 @@ if ( flag_iter ) then
          endif
 
          !use pedros iterative function to find z/l
-         !zol=zolri(rb,za,zntstoch,zt,zol,psi_opt)
+         !zol=zolri(rb,za,zntstoch,zt,zol,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
          !use brute-force method
-         zol=zolrib(rb,za,zntstoch,zt,gz1oz0,gz1ozt,zol,psi_opt)
+         zol=zolrib(rb,za,zntstoch,zt,gz1oz0,gz1ozt,zol,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
       endif ! restart
       zol=max(zol,zero)
       zol=min(zol,20._kind_phys)
@@ -455,11 +461,11 @@ if ( flag_iter ) then
       !CALL PSI_Zilitinkevich_Esau_2007(PSIM,PSIH,ZOL)
       !CALL PSI_DyerHicks(PSIM,PSIH,ZOL,ZT,ZNTstoch,ZA)
       !CALL PSI_CB2005(PSIM,PSIH,zolza,zolz0)
-      psim=psim_stable(zolza,psi_opt)-psim_stable(zolz0,psi_opt)
-      psih=psih_stable(zolza,psi_opt)-psih_stable(zolzt,psi_opt)
-      psim10=psim_stable(zol10,psi_opt)-psim_stable(zolz0,psi_opt)
-      psih10=psih_stable(zol10,psi_opt)-psih_stable(zolz0,psi_opt)
-      psih2=psih_stable(zol2,psi_opt)-psih_stable(zolzt,psi_opt)
+      psim=psim_stable(zolza,psi_opt,psim_stab)-psim_stable(zolz0,psi_opt,psim_stab)
+      psih=psih_stable(zolza,psi_opt,psih_stab)-psih_stable(zolzt,psi_opt,psih_stab)
+      psim10=psim_stable(zol10,psi_opt,psim_stab)-psim_stable(zolz0,psi_opt,psim_stab)
+      psih10=psih_stable(zol10,psi_opt,psih_stab)-psih_stable(zolz0,psi_opt,psih_stab)
+      psih2=psih_stable(zol2,psi_opt,psih_stab)-psih_stable(zolzt,psi_opt,psih_stab)
 
       ! 1.0 over Monin-Obukhov length
       rmol= zol/za
@@ -489,7 +495,7 @@ if ( flag_iter ) then
          zol=max(zol,-20.0_kind_phys)
          zol=min(zol,zero)
 
-         if (debug_code >= 1) then
+         if (debug_code == 2) then
             if (zntstoch < 1e-8 .or. zt < 1e-10) then
                write(0,*)"===(ice) capture bad input in mynn sfc layer, i=:",i
                write(0,*)"rb=", rb," znt=", zntstoch," zt=",zt
@@ -501,9 +507,9 @@ if ( flag_iter ) then
          endif
 
          !Use Pedros iterative function to find z/L
-         !zol=zolri(rb,ZA,ZNTstoch,ZT,ZOL,psi_opt)
+         !zol=zolri(rb,ZA,ZNTstoch,ZT,ZOL,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
          !Use brute-force method
-         zol=zolrib(rb,ZA,ZNTstoch,zt,GZ1OZ0,GZ1OZt,ZOL,psi_opt)
+         zol=zolrib(rb,ZA,ZNTstoch,zt,GZ1OZ0,GZ1OZt,ZOL,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
       endif ! restart
       zol=max(zol,-20.0_kind_phys)
       zol=min(zol,zero)
@@ -519,20 +525,20 @@ if ( flag_iter ) then
       !CALL PSI_Businger_1971(PSIM,PSIH,ZOL)
       !CALL PSI_DyerHicks(PSIM,PSIH,ZOL,ZT,ZNTstoch,ZA)
       ! use tables
-      psim=psim_unstable(zolza,psi_opt)-psim_unstable(zolz0,psi_opt)
-      psih=psih_unstable(zolza,psi_opt)-psih_unstable(zolzt,psi_opt)
-      psim10=psim_unstable(zol10,psi_opt)-psim_unstable(zolz0,psi_opt)
-      psih10=psih_unstable(zol10,psi_opt)-psih_unstable(zolz0,psi_opt)
-      psih2=psih_unstable(zol2,psi_opt)-psih_unstable(zolzt,psi_opt)
+      psim=psim_unstable(zolza,psi_opt,psim_unstab)-psim_unstable(zolz0,psi_opt,psim_unstab)
+      psih=psih_unstable(zolza,psi_opt,psih_unstab)-psih_unstable(zolzt,psi_opt,psih_unstab)
+      psim10=psim_unstable(zol10,psi_opt,psim_unstab)-psim_unstable(zolz0,psi_opt,psim_unstab)
+      psih10=psih_unstable(zol10,psi_opt,psih_unstab)-psih_unstable(zolz0,psi_opt,psih_unstab)
+      psih2=psih_unstable(zol2,psi_opt,psih_unstab)-psih_unstable(zolzt,psi_opt,psih_unstab)
 
       !---LIMIT PSIH AND PSIM IN THE CASE OF THIN LAYERS AND
       !---HIGH ROUGHNESS.  THIS PREVENTS DENOMINATOR IN FLUXES
       !---FROM GETTING TOO SMALL
-      psih=min(psih,0.9*gz1ozt)
-      psim=min(psim,0.9*gz1oz0)
-      psih2=min(psih2,0.9*gz2ozt)
-      psim10=min(psim10,0.9*gz10oz0)
-      psih10=min(psih10,0.9*gz10ozt)
+      psih=min(psih,p9*gz1ozt)
+      psim=min(psim,p9*gz1oz0)
+      psih2=min(psih2,p9*gz2ozt)
+      psim10=min(psim10,p9*gz10oz0)
+      psih10=min(psih10,p9*gz10ozt)
 
       rmol = zol/za
 
@@ -575,7 +581,7 @@ if ( flag_iter ) then
 
 endif ! flag_iter
 
-if (debug_code == 2) then
+if (debug_code >= 1) then
    write(*,*)"==== at end of main loop, i=",i, "(ice)"
    write(*,*)"z/l:",zol," wspd:",wspd," tstar:",mol
    write(*,*)"psim:",psim," psih:",psih," w*:",wstar," dthv:",thv_1-thvsk
@@ -601,12 +607,8 @@ if ( flag_iter ) then
       ch   = zero
       chs2 = zero
       cqs2 = zero
-      ch= zero
-      cm= zero
-      ch= zero
-      cm= zero
-      ch= zero
-      cm= zero
+      ch   = zero
+      cm   = zero
 
    else
 
@@ -647,14 +649,16 @@ if ( flag_iter ) then
       cqs2=ust*karman/psiq2
       chs2=ust*karman/psit2
 
-      if (debug_code > 1) then
-         write(*,*)"qfx=",qfx,"flqc=",flqc
-         write(*,*)"ice, mavail:",mavail," u*=",ust," psiq=",psiq
+      if (debug_code >= 1) then
+         write(*,*)"=== ice: after flux calculations:"
+         write(*,*)"qfx=",qfx,"flqc=",flqc," lh=",lh
+         write(*,*)"hfx=",hfx,"flhc=",flhc," wspd=",wspd
+         write(*,*)" u*=",ust," psiq=",psiq," chs=",chs
       endif
 
       ! The exchange coefficient for cloud water is assumed to be the
       ! same as that for heat. CH is multiplied by WSPD.
-      ch=flhc/( cpm*RHO_1 )
+      ch=flhc/( cpm*rho_1 )
 
       !-----------------------------------------
       !--- COMPUTE EXCHANGE COEFFICIENTS FOR FV3
@@ -712,7 +716,7 @@ IF (compute_diag) then
       !***  THE VALUES AT THE SURFACE AND LOWEST MODEL LEVEL.
       if ((th_1>thsk .and. (th2<thsk .or. th2>th_1)) .or. &
          (th_1<thsk .and. (th2>thsk .or. th2<th_1))) then
-          th2=thsk + 2.*(th_1-thsk)/za
+          th2=thsk + two*(th_1-thsk)/za
       endif
       t2=th2*(psfcpa/100000.)**rovcp
 
@@ -807,7 +811,7 @@ end subroutine mynnsfc_ice
       !Calculate zo for snow (Andreas et al. 2005, BLM)
        zntsno = 0.135*bvisc/ustar +                                 &
                (0.035*(ustar*ustar)*g_inv) *                        &
-               (5.*exp(-1.*(((ustar - 0.18)/0.1)*((ustar - 0.18)/0.1))) + 1.)
+               (five*exp(-1.*(((ustar - 0.18)/p1)*((ustar - 0.18)/p1))) + one)
        Ren2 = ustar*zntsno/bvisc
 
        ! Make sure that Re is not outside of the range of validity
@@ -834,7 +838,7 @@ end subroutine mynnsfc_ice
        ! stochastically perturb thermal and moisture roughness length.
        ! currently set to half the amplitude:
        if (spp_sfc==1) then
-          Zt = Zt + Zt * 0.5_kind_phys * rstoch
+          Zt = Zt + Zt * p5 * rstoch
           Zt = MAX(Zt, 0.0001_kind_phys)
           Zq = Zt
        endif
@@ -1111,7 +1115,7 @@ end subroutine mynnsfc_ice
     END SUBROUTINE Li_etal_2010
 !-------------------------------------------------------------------
 !>\ingroup mynn_sfc
-      REAL(kind_phys) function zolri(ri,za,z0,zt,zol1,psi_opt)
+      REAL(kind_phys) function zolri(ri,za,z0,zt,zol1,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
 
       !> This iterative algorithm was taken from the revised surface layer
       !! scheme in WRF-ARW, written by Pedro Jimenez and Jimy Dudhia and
@@ -1119,13 +1123,14 @@ end subroutine mynnsfc_ice
       !! to input the thermal roughness length, zt, (as well as z0) and use initial
       !! estimate of z/L.
 
-      IMPLICIT NONE
-      REAL(kind_phys), INTENT(IN) :: ri,za,z0,zt,zol1
-      INTEGER, INTENT(IN) :: psi_opt
-      REAL(kind_phys) :: x1,x2,fx1,fx2
-      INTEGER :: n
-      INTEGER, PARAMETER :: nmax = 20
+      implicit none
+      real(kind_phys), intent(in) :: ri,za,z0,zt,zol1
+      integer, intent(in) :: psi_opt
+      real(kind_phys) :: x1,x2,fx1,fx2
+      integer :: n
+      integer, parameter :: nmax = 20
       !REAL(kind_phys), DIMENSION(nmax):: zLhux
+      real(kind_phys),dimension(0:1000),intent(in)::psim_stab,psih_stab,psim_unstab,psih_unstab
 
       if (ri.lt.0.)then
          x1=zol1 - 0.02_kind_phys  !-5.
@@ -1136,17 +1141,17 @@ end subroutine mynnsfc_ice
       endif
 
       n=1
-      fx1=zolri2(x1,ri,za,z0,zt,psi_opt)
-      fx2=zolri2(x2,ri,za,z0,zt,psi_opt)
+      fx1=zolri2(x1,ri,za,z0,zt,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
+      fx2=zolri2(x2,ri,za,z0,zt,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
 
       Do While (abs(x1 - x2) > 0.01 .and. n < nmax)
         if(abs(fx2).lt.abs(fx1))then
           x1=x1-fx1/(fx2-fx1)*(x2-x1)
-          fx1=zolri2(x1,ri,za,z0,zt,psi_opt)
+          fx1=zolri2(x1,ri,za,z0,zt,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
           zolri=x1
         else
           x2=x2-fx2/(fx2-fx1)*(x2-x1)
-          fx2=zolri2(x2,ri,za,z0,zt,psi_opt)
+          fx2=zolri2(x2,ri,za,z0,zt,psi_opt,psim_stab,psih_stab,psim_unstab,psih_unstab)
           zolri=x2
         endif
         n=n+1
@@ -1165,7 +1170,8 @@ end subroutine mynnsfc_ice
 
       end function
 !-------------------------------------------------------------------
-      REAL(kind_phys) function zolri2(zol2,ri2,za,z0,zt,psi_opt)
+      real(kind_phys) function zolri2(zol2,ri2,za,z0,zt,psi_opt,&
+                      psim_stab,psih_stab,psim_unstab,psih_unstab)
 
       ! INPUT: =================================
       ! zol2 - estimated z/L
@@ -1176,11 +1182,12 @@ end subroutine mynnsfc_ice
       ! OUTPUT: ================================
       ! zolri2 - delta Ri
 
-      IMPLICIT NONE
-      INTEGER, INTENT(IN)            :: psi_opt
-      REAL(kind_phys), INTENT(IN)    :: ri2,za,z0,zt
-      REAL(kind_phys), INTENT(INOUT) :: zol2
-      REAL(kind_phys) :: zol20,zol3,psim1,psih1,psix2,psit2,zolt
+      implicit none
+      integer, intent(in)            :: psi_opt
+      real(kind_phys), intent(in)    :: ri2,za,z0,zt
+      real(kind_phys), intent(inout) :: zol2
+      real(kind_phys) :: zol20,zol3,psim1,psih1,psix2,psit2,zolt
+      real(kind_phys),dimension(0:1000),intent(in)::psim_stab,psih_stab,psim_unstab,psih_unstab
 
       if(zol2*ri2 .lt. 0.)zol2=zero  ! limit zol2 - must be same sign as ri2
 
@@ -1191,13 +1198,13 @@ end subroutine mynnsfc_ice
       if (ri2.lt.0) then
          !psix2=log((za+z0)/z0)-(psim_unstable(zol3)-psim_unstable(zol20))
          !psit2=log((za+zt)/zt)-(psih_unstable(zol3)-psih_unstable(zol20))
-         psit2=MAX(log((za+z0)/zt)-(psih_unstable(zol3,psi_opt)-psih_unstable(zolt,psi_opt)),  one)
-         psix2=MAX(log((za+z0)/z0)-(psim_unstable(zol3,psi_opt)-psim_unstable(zol20,psi_opt)), one)
+         psit2=max(log((za+z0)/zt)-(psih_unstable(zol3,psi_opt,psih_unstab)-psih_unstable(zolt,psi_opt,psih_unstab)),  one)
+         psix2=max(log((za+z0)/z0)-(psim_unstable(zol3,psi_opt,psim_unstab)-psim_unstable(zol20,psi_opt,psim_unstab)), one)
       else
          !psix2=log((za+z0)/z0)-(psim_stable(zol3)-psim_stable(zol20))
          !psit2=log((za+zt)/zt)-(psih_stable(zol3)-psih_stable(zol20))
-         psit2=MAX(log((za+z0)/zt)-(psih_stable(zol3,psi_opt)-psih_stable(zolt,psi_opt)),  one)
-         psix2=MAX(log((za+z0)/z0)-(psim_stable(zol3,psi_opt)-psim_stable(zol20,psi_opt)), one)
+         psit2=max(log((za+z0)/zt)-(psih_stable(zol3,psi_opt,psih_stab)-psih_stable(zolt,psi_opt,psih_stab)),  one)
+         psix2=max(log((za+z0)/z0)-(psim_stable(zol3,psi_opt,psim_stab)-psim_stable(zol20,psi_opt,psim_stab)), one)
       endif
 
       zolri2=zol2*psit2/psix2**2 - ri2
@@ -1206,19 +1213,21 @@ end subroutine mynnsfc_ice
       end function
 !====================================================================
 
-      REAL(kind_phys) function zolrib(ri,za,z0,zt,logz0,logzt,zol1,psi_opt)
+      REAL(kind_phys) function zolrib(ri,za,z0,zt,logz0,logzt,zol1,psi_opt,&
+                      psim_stab,psih_stab,psim_unstab,psih_unstab)
 
       ! This iterative algorithm to compute z/L from bulk-Ri
 
-      IMPLICIT NONE
-      REAL(kind_phys), INTENT(IN) :: ri,za,z0,zt,logz0,logzt
-      INTEGER, INTENT(IN)         :: psi_opt
-      REAL(kind_phys), INTENT(INOUT) :: zol1
-      REAL(kind_phys) :: zol20,zol3,zolt,zolold
-      INTEGER :: n
-      INTEGER, PARAMETER :: nmax = 20
-      !REAL(kind_phys), DIMENSION(nmax):: zLhux
-      REAL(kind_phys) :: psit2,psix2
+      implicit none
+      real(kind_phys), intent(in) :: ri,za,z0,zt,logz0,logzt
+      integer, intent(in)         :: psi_opt
+      real(kind_phys), intent(inout) :: zol1
+      real(kind_phys) :: zol20,zol3,zolt,zolold
+      integer :: n
+      integer, parameter :: nmax = 20
+      !real(kind_phys), dimension(nmax):: zlhux
+      real(kind_phys) :: psit2,psix2
+      real(kind_phys),dimension(0:1000),intent(in)::psim_stab,psih_stab,psim_unstab,psih_unstab
 
       !print*,"+++++++INCOMING: z/L=",zol1," ri=",ri
       if (zol1*ri .lt. 0.) THEN
@@ -1249,13 +1258,13 @@ end subroutine mynnsfc_ice
         if (ri.lt.0) then
            !psit2=log((za+zt)/zt)-(psih_unstable(zol3)-psih_unstable(zol20))
            !psit2=log((za+z0)/zt)-(psih_unstable(zol3)-psih_unstable(zol20))
-           psit2=MAX(logzt-(psih_unstable(zol3,psi_opt)-psih_unstable(zolt,psi_opt)),  one)
-           psix2=MAX(logz0-(psim_unstable(zol3,psi_opt)-psim_unstable(zol20,psi_opt)), one)
+           psit2=MAX(logzt-(psih_unstable(zol3,psi_opt,psih_unstab)-psih_unstable(zolt,psi_opt,psih_unstab)),  one)
+           psix2=MAX(logz0-(psim_unstable(zol3,psi_opt,psim_unstab)-psim_unstable(zol20,psi_opt,psim_unstab)), one)
         else
            !psit2=log((za+zt)/zt)-(psih_stable(zol3)-psih_stable(zol20))
            !psit2=log((za+z0)/zt)-(psih_stable(zol3)-psih_stable(zol20))
-           psit2=MAX(logzt-(psih_stable(zol3,psi_opt)-psih_stable(zolt,psi_opt)),  one)
-           psix2=MAX(logz0-(psim_stable(zol3,psi_opt)-psim_stable(zol20,psi_opt)), one)
+           psit2=MAX(logzt-(psih_stable(zol3,psi_opt,psih_stab)-psih_stable(zolt,psi_opt,psih_stab)),  one)
+           psix2=MAX(logz0-(psim_stable(zol3,psi_opt,psim_stab)-psim_stable(zol20,psi_opt,psim_stab)), one)
         endif
         !print*,"n=",n," psit2=",psit2," psix2=",psix2
         zolrib=ri*psix2**2/psit2
@@ -1280,53 +1289,6 @@ end subroutine mynnsfc_ice
 
       end function
 !====================================================================
-!>\ingroup mynn_sfc
-!!
-   SUBROUTINE psi_init(psi_opt,errmsg,errflg)
-
-    integer                       :: N,psi_opt
-    real(kind_phys)               :: zolf
-    character(len=*), intent(out) :: errmsg
-    integer, intent(out)          :: errflg
-
-    if (psi_opt == 0) then
-       DO N=0,1000
-          ! stable function tables
-          zolf = float(n)*0.01_kind_phys
-          psim_stab(n)=psim_stable_full(zolf)
-          psih_stab(n)=psih_stable_full(zolf)
-
-          ! unstable function tables
-          zolf = -float(n)*0.01_kind_phys
-          psim_unstab(n)=psim_unstable_full(zolf)
-          psih_unstab(n)=psih_unstable_full(zolf)
-       ENDDO
-    else
-       DO N=0,1000
-          ! stable function tables
-          zolf = float(n)*0.01_kind_phys
-          psim_stab(n)=psim_stable_full_gfs(zolf)
-          psih_stab(n)=psih_stable_full_gfs(zolf)
-
-          ! unstable function tables
-          zolf = -float(n)*0.01_kind_phys
-          psim_unstab(n)=psim_unstable_full_gfs(zolf)
-          psih_unstab(n)=psih_unstable_full_gfs(zolf)
-       ENDDO
-    endif
-
-    !Simple test to see if initialization worked:
-    if (psim_stab(1) < 0. .AND. psih_stab(1) < 0. .AND. &
-        psim_unstab(1) > 0. .AND. psih_unstab(1) > 0.) then
-       errmsg = 'In MYNN SFC, Psi tables have been initialized'
-       errflg = 0
-    else
-       errmsg = 'Error in MYNN SFC: Problem initializing psi tables'
-       errflg = 1
-    endif
-
-   END SUBROUTINE psi_init
-! ==================================================================
 ! ... integrated similarity functions from MYNN...
 !
 !>\ingroup mynn_sfc
@@ -1448,15 +1410,15 @@ end subroutine mynnsfc_ice
         else
            hl1   = -zolf
            tem1  = one / sqrt(hl1)
-           psih_unstable_full_gfs  = log(hl1) + .5_kind_phys * tem1 + 1.386_kind_phys
+           psih_unstable_full_gfs  = log(hl1) + p5 * tem1 + 1.386_kind_phys
         end if
 
    end function
 
 !>\ingroup mynn_sfc
 !! look-up table functions - or, if beyond -10 < z/L < 10, recalculate
-   real(kind_phys) function psim_stable(zolf,psi_opt)
-
+    real(kind_phys) function psim_stable(zolf,psi_opt,psim_stab)
+        real(kind_phys),dimension(0:1000)::psim_stab
         integer :: nzol,psi_opt
         real(kind_phys) :: rzol,zolf
 
@@ -1475,8 +1437,8 @@ end subroutine mynnsfc_ice
    end function
 
 !>\ingroup mynn_sfc
-   real(kind_phys) function psih_stable(zolf,psi_opt)
-
+    real(kind_phys) function psih_stable(zolf,psi_opt,psih_stab)
+        real(kind_phys),dimension(0:1000)::psih_stab
         integer :: nzol,psi_opt
         real(kind_phys) :: rzol,zolf
 
@@ -1495,8 +1457,8 @@ end subroutine mynnsfc_ice
    end function
 
 !>\ingroup mynn_sfc
-   real(kind_phys) function psim_unstable(zolf,psi_opt)
-
+    real(kind_phys) function psim_unstable(zolf,psi_opt,psim_unstab)
+        real(kind_phys),dimension(0:1000)::psim_unstab
         integer :: nzol,psi_opt
         real(kind_phys) :: rzol,zolf
 
@@ -1515,8 +1477,8 @@ end subroutine mynnsfc_ice
    end function
 
 !>\ingroup mynn_sfc
-   real(kind_phys) function psih_unstable(zolf,psi_opt)
-
+    real(kind_phys) function psih_unstable(zolf,psi_opt,psih_unstab)
+        real(kind_phys),dimension(0:1000)::psih_unstab
         integer :: nzol,psi_opt
         real(kind_phys) :: rzol,zolf
 
