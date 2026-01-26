@@ -351,7 +351,7 @@
     loc_cycle = .false.
  endif
  
- if (itimestep==1 .and. (not(restart) .or. not(loc_cycle))) then
+ if (itimestep==1 .and. (.not.(restart) .or. .not.(loc_cycle))) then
     !cold starts
     do j = jts,jte
        do i = its,ite
@@ -373,13 +373,13 @@
  
  do j = jts,jte
     do i = its,ite      
-       u_1     = u3d(i,kts,j)
-       v_1     = v3d(i,kts,j)
-       ust_1   = ust(i,j)
-       stress_1= ust_1**2
-       mol_1   = mol(i,j)
-       qsfc_1  = qsfc(i,j)
-       qstar_1 = qstar(i,j)
+       u_1      = u3d(i,kts,j)
+       v_1      = v3d(i,kts,j)
+       ust_1    = ust(i,j)
+       stress_1 = ust_1**2
+       mol_1    = mol(i,j)
+       qsfc_1   = qsfc(i,j)
+       qstar_1  = qstar(i,j)
 
        !spp - input only
        if(spp_pbl==1) then
